@@ -14,6 +14,17 @@ function notifyAuthRequired(status, detail) {
     window.dispatchEvent(new CustomEvent('muapi:auth-required', { detail: { status, message: detail } }));
 }
 
+// KabOozi protocol: report metered usage to an embedding host, if any. A
+// no-op standalone (window.top === window.self) and a no-op if the host
+// never asks for cost accounting — this is opt-in on the host side.
+function reportKabooziUsage(action, units = 1) {
+    if (typeof window === 'undefined' || window.self === window.top) return;
+    window.parent.postMessage(
+        { type: 'kaboozi:usage', version: 1, providerId: 'muapi', action, units },
+        '*'
+    );
+}
+
 async function pollForResult(requestId, key, maxAttempts = 900, interval = 2000) {
     const pollUrl = `${BASE_URL}/api/v1/predictions/${requestId}/result`;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -39,7 +50,7 @@ async function pollForResult(requestId, key, maxAttempts = 900, interval = 2000)
     throw new Error('Generation timed out after polling.');
 }
 
-async function submitAndPoll(endpoint, payload, key, onRequestId, maxAttempts = 60) {
+async function submitAndPoll(endpoint, payload, key, onRequestId, maxAttempts = 60, kabooziAction = null, kabooziUnits = 1) {
     const url = `${BASE_URL}/api/v1/${endpoint}`;
     const response = await fetch(url, {
         method: 'POST',
@@ -57,6 +68,7 @@ async function submitAndPoll(endpoint, payload, key, onRequestId, maxAttempts = 
     if (onRequestId) onRequestId(requestId);
     const result = await pollForResult(requestId, key, maxAttempts);
     const outputUrl = result.outputs?.[0] || result.url || result.output?.url;
+    if (kabooziAction) reportKabooziUsage(kabooziAction, kabooziUnits);
     return { ...result, url: outputUrl };
 }
 
@@ -76,7 +88,7 @@ export async function generateImage(apiKey, params) {
         payload.image_url = null;
     }
     if (params.seed && params.seed !== -1) payload.seed = params.seed;
-    return submitAndPoll(endpoint, payload, apiKey, params.onRequestId, 60);
+    return submitAndPoll(endpoint, payload, apiKey, params.onRequestId, 60, 'image', 1);
 }
 
 export async function generateI2I(apiKey, params) {
@@ -96,7 +108,7 @@ export async function generateI2I(apiKey, params) {
     if (modelInfo?.inputs?.name) {
         payload.name = params.name || modelInfo.inputs.name.default;
     }
-    return submitAndPoll(endpoint, payload, apiKey, params.onRequestId, 60);
+    return submitAndPoll(endpoint, payload, apiKey, params.onRequestId, 60, 'image', 1);
 }
 
 export async function generateVideo(apiKey, params) {
@@ -110,7 +122,7 @@ export async function generateVideo(apiKey, params) {
     if (params.quality) payload.quality = params.quality;
     if (params.mode) payload.mode = params.mode;
     if (params.image_url) payload.image_url = params.image_url;
-    return submitAndPoll(endpoint, payload, apiKey, params.onRequestId, 900);
+    return submitAndPoll(endpoint, payload, apiKey, params.onRequestId, 900, 'video-second', params.duration || 5);
 }
 
 export async function generateI2V(apiKey, params) {
@@ -135,7 +147,7 @@ export async function generateI2V(apiKey, params) {
     if (modelInfo?.inputs?.name) {
         payload.name = params.name || modelInfo.inputs.name.default;
     }
-    return submitAndPoll(endpoint, payload, apiKey, params.onRequestId, 900);
+    return submitAndPoll(endpoint, payload, apiKey, params.onRequestId, 900, 'video-second', params.duration || 5);
 }
 
 export async function generateMarketingStudioAd(apiKey, params) {
@@ -147,7 +159,7 @@ export async function generateMarketingStudioAd(apiKey, params) {
         images_list: params.images_list || [],
         video_files: params.video_files || []
     };
-    return submitAndPoll(endpoint, payload, apiKey, params.onRequestId, 900);
+    return submitAndPoll(endpoint, payload, apiKey, params.onRequestId, 900, 'video-second', payload.duration || 5);
 }
 
 export async function processV2V(apiKey, params) {
@@ -161,7 +173,7 @@ export async function processV2V(apiKey, params) {
     if (modelInfo?.hasPrompt && params.prompt) {
         payload.prompt = params.prompt;
     }
-    return submitAndPoll(endpoint, payload, apiKey, params.onRequestId, 900);
+    return submitAndPoll(endpoint, payload, apiKey, params.onRequestId, 900, 'video-second', 5);
 }
 
 export async function processLipSync(apiKey, params) {
@@ -174,7 +186,7 @@ export async function processLipSync(apiKey, params) {
     if (modelInfo?.hasPrompt) payload.prompt = params.prompt || '';
     if (params.resolution) payload.resolution = params.resolution;
     if (params.seed !== undefined && params.seed !== -1) payload.seed = params.seed;
-    return submitAndPoll(endpoint, payload, apiKey, params.onRequestId, 900);
+    return submitAndPoll(endpoint, payload, apiKey, params.onRequestId, 900, 'lipsync', 1);
 }
 
 export async function generateAudio(apiKey, params) {
@@ -188,7 +200,7 @@ export async function generateAudio(apiKey, params) {
             payload[key] = params[key];
         }
     }
-    return submitAndPoll(endpoint, payload, apiKey, params.onRequestId, 900);
+    return submitAndPoll(endpoint, payload, apiKey, params.onRequestId, 900, 'audio-second', payload.duration || 5);
 }
 
 export function uploadFile(apiKey, file, onProgress) {
@@ -676,7 +688,7 @@ export async function runClipping(apiKey, params) {
         aspect_ratio: params.aspect_ratio || "9:16",
         return_coordinates_only: !!params.return_coordinates_only
     };
-    return submitAndPoll("ai-clipping", payload, apiKey, params.onRequestId, 900);
+    return submitAndPoll("ai-clipping", payload, apiKey, params.onRequestId, 900, 'video-second', 5);
 }
 
 export async function runMotionGraphics(apiKey, params) {
@@ -685,7 +697,7 @@ export async function runMotionGraphics(apiKey, params) {
         aspect_ratio: params.aspect_ratio || "16:9",
         duration_seconds: params.duration_seconds || 6,
     };
-    return submitAndPoll("motion-graphics", payload, apiKey, params.onRequestId, 900);
+    return submitAndPoll("motion-graphics", payload, apiKey, params.onRequestId, 900, 'video-second', payload.duration_seconds);
 }
 
 export async function runMotionGraphicsEdit(apiKey, params) {
@@ -695,5 +707,5 @@ export async function runMotionGraphicsEdit(apiKey, params) {
         aspect_ratio: params.aspect_ratio || "16:9",
         duration_seconds: params.duration_seconds || 6,
     };
-    return submitAndPoll("motion-graphics-edit", payload, apiKey, params.onRequestId, 900);
+    return submitAndPoll("motion-graphics-edit", payload, apiKey, params.onRequestId, 900, 'video-second', payload.duration_seconds);
 }
