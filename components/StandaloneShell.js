@@ -158,6 +158,22 @@ export default function StandaloneShell() {
     document.cookie = "muapi_key=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
   }, []);
 
+  // KabOozi protocol: when embedded in a host shell (e.g. Creative Command
+  // Center) with key-sharing enabled, prefer the host's shared muapi key over
+  // asking the user to enter their own. Standalone use is unaffected — the
+  // host never posts unless it detects this window inside an iframe.
+  useEffect(() => {
+    if (window.self === window.top) return;
+    const onMessage = (event) => {
+      if (event.data?.type !== 'kaboozi:config' || event.data?.version !== 1) return;
+      const shared = event.data.providers?.muapi;
+      if (shared?.apiKey) handleKeySave(shared.apiKey);
+    };
+    window.addEventListener('message', onMessage);
+    window.parent.postMessage({ type: 'kaboozi:ready', version: 1 }, '*');
+    return () => window.removeEventListener('message', onMessage);
+  }, [handleKeySave]);
+
   // Inject API key into all outgoing Axios requests (prop-based approach)
   // We use an interceptor to be selective and NOT send the key to external domains like S3
   useEffect(() => {
