@@ -1,4 +1,4 @@
-import { getModelById, getVideoModelById, getI2IModelById, getI2VModelById, getV2VModelById, getLipSyncModelById, getAudioModelById } from './models.js';
+import { getModelById, getVideoModelById, getI2IModelById, getI2VModelById, getV2VModelById, getRecastModelById, getLipSyncModelById, getAudioModelById } from './models.js';
 
 // In an http(s) browser we route through the host app's proxy (Next.js routes
 // under /api/* re-issue the call server-side) so api.muapi.ai CORS is bypassed.
@@ -102,6 +102,9 @@ export async function generateI2I(apiKey, params) {
         if (imageField === 'images_list') payload.images_list = imagesList;
         else payload[imageField] = imagesList[0];
     }
+    if (modelInfo?.swapField && params.swap_url) {
+        payload[modelInfo.swapField] = params.swap_url;
+    }
     if (params.aspect_ratio) payload.aspect_ratio = params.aspect_ratio;
     if (params.resolution) payload.resolution = params.resolution;
     if (params.quality) payload.quality = params.quality;
@@ -116,12 +119,15 @@ export async function generateVideo(apiKey, params) {
     const endpoint = modelInfo?.endpoint || params.model;
     const payload = {};
     if (params.prompt) payload.prompt = params.prompt;
+    if (params.request_id) payload.request_id = params.request_id;
     if (params.aspect_ratio) payload.aspect_ratio = params.aspect_ratio;
     if (params.duration) payload.duration = params.duration;
     if (params.resolution) payload.resolution = params.resolution;
     if (params.quality) payload.quality = params.quality;
     if (params.mode) payload.mode = params.mode;
     if (params.image_url) payload.image_url = params.image_url;
+    if (params.images_list?.length > 0) payload.images_list = params.images_list;
+    if (params.videos_list?.length > 0) payload.videos_list = params.videos_list;
     return submitAndPoll(endpoint, payload, apiKey, params.onRequestId, 900, 'video-second', params.duration || 5);
 }
 
@@ -131,13 +137,23 @@ export async function generateI2V(apiKey, params) {
     const payload = {};
     if (params.prompt) payload.prompt = params.prompt;
     const imageField = modelInfo?.imageField || 'image_url';
-    if (params.image_url) {
+    if (params.images_list && params.images_list.length > 0) {
+        if (imageField === 'images_list') payload.images_list = params.images_list;
+        else payload[imageField] = params.images_list[0];
+    } else if (params.image_url) {
         if (imageField === 'images_list') payload.images_list = [params.image_url];
         else payload[imageField] = params.image_url;
     }
     const lastImageField = modelInfo?.lastImageField;
     if (lastImageField && params.last_image) {
-        payload[lastImageField] = params.last_image;
+        if (lastImageField === 'images_list') {
+            if (!payload.images_list) payload.images_list = [];
+            if (payload.images_list.indexOf(params.last_image) === -1) {
+                payload.images_list.push(params.last_image);
+            }
+        } else {
+            payload[lastImageField] = params.last_image;
+        }
     }
     if (params.aspect_ratio) payload.aspect_ratio = params.aspect_ratio;
     if (params.duration) payload.duration = params.duration;
@@ -172,6 +188,23 @@ export async function processV2V(apiKey, params) {
     }
     if (modelInfo?.hasPrompt && params.prompt) {
         payload.prompt = params.prompt;
+    }
+    return submitAndPoll(endpoint, payload, apiKey, params.onRequestId, 900, 'video-second', 5);
+}
+
+export async function processRecast(apiKey, params) {
+    const modelInfo = getRecastModelById(params.model);
+    const endpoint = modelInfo?.endpoint || params.model;
+    const videoField = modelInfo?.videoField || 'video_url';
+    const payload = { [videoField]: params.video_url };
+    if (modelInfo?.imageField && params.image_url) {
+        payload[modelInfo.imageField] = params.image_url;
+    }
+    if (modelInfo?.hasPrompt && params.prompt) {
+        payload.prompt = params.prompt;
+    }
+    if (params.aspect_ratio) {
+        payload.aspect_ratio = params.aspect_ratio;
     }
     return submitAndPoll(endpoint, payload, apiKey, params.onRequestId, 900, 'video-second', 5);
 }

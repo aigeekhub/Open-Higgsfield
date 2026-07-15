@@ -1,13 +1,11 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { processLipSync, uploadFile } from "../muapi.js";
+import { processRecast, uploadFile } from "../muapi.js";
 import {
-  lipsyncModels,
-  imageLipSyncModels,
-  videoLipSyncModels,
-  getLipSyncModelById,
-  getResolutionsForLipSyncModel,
+  recastModels,
+  getRecastModelById,
+  getAspectRatiosForRecastModel,
 } from "../models.js";
 
 // ---------------------------------------------------------------------------
@@ -30,7 +28,6 @@ function MediaPickerButton({
   fileName,
   previewUrl,
   isVideo,
-  apiKey,
 }) {
   const inputRef = useRef(null);
 
@@ -130,16 +127,7 @@ function MediaPickerButton({
               />
             )
           ) : (
-            <div className="flex flex-col items-center justify-center w-full px-1">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-primary mb-0.5">
-                <path d="M9 18V5l12-2v13" />
-                <circle cx="6" cy="18" r="3" />
-                <circle cx="18" cy="16" r="3" />
-              </svg>
-              <span className="text-[7px] font-black text-primary uppercase truncate w-full text-center">
-                {fileName?.split('.').pop() || "AUD"}
-              </span>
-            </div>
+            icon
           )}
         </div>
       )}
@@ -230,73 +218,10 @@ function Dropdown({ isOpen, items, selectedId, onSelect, onClose, anchorRef }) {
 }
 
 // ---------------------------------------------------------------------------
-// History sidebar thumbnail
-// ---------------------------------------------------------------------------
-function HistoryThumb({ entry, isActive, onSelect, onDownload }) {
-  return (
-    <div
-      onClick={onSelect}
-      className={`relative group/thumb cursor-pointer rounded-lg overflow-hidden border-2 transition-all duration-300 ${
-        isActive
-          ? "border-primary shadow-glow"
-          : "border-white/10 hover:border-white/30"
-      }`}
-    >
-      <video
-        src={entry.url}
-        preload="metadata"
-        muted
-        className="w-full aspect-square object-cover"
-      />
-      <div className="absolute inset-0 bg-black/60 opacity-0 group-hover/thumb:opacity-100 transition-opacity flex items-center justify-center">
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDownload(entry);
-          }}
-          className="p-1.5 bg-primary rounded-lg text-black hover:scale-110 transition-transform"
-          title="Download"
-        >
-          <svg
-            width="12"
-            height="12"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="3"
-          >
-            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
-          </svg>
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // SVG icons
 // ---------------------------------------------------------------------------
-const MicIcon = ({
-  className = "text-muted group-hover:text-primary transition-colors",
-}) => (
-  <svg
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="2"
-    className={className}
-  >
-    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-    <line x1="12" y1="19" x2="12" y2="23" />
-  </svg>
-);
-
 const VideoIcon = ({
-  className = "text-muted group-hover:text-primary transition-colors",
+  className = "text-white/40 group-hover:text-primary transition-colors",
 }) => (
   <svg
     width="16"
@@ -312,188 +237,141 @@ const VideoIcon = ({
   </svg>
 );
 
+const ImageIcon = ({
+  className = "text-white/40 group-hover:text-primary transition-colors",
+}) => (
+  <svg
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    className={className}
+  >
+    <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+    <circle cx="8.5" cy="8.5" r="1.5" />
+    <polyline points="21 15 16 10 5 21" />
+  </svg>
+);
+
 // ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
-export default function LipSyncStudio({
+export default function RecastStudio({
   apiKey,
   onGenerationComplete,
   historyItems,
   droppedFiles,
   onFilesHandled,
 }) {
-  const PERSIST_KEY = "hg_lipsync_studio_persistent";
+  const PERSIST_KEY = "hg_recast_studio_persistent";
 
-  // ── Mode & model state ──────────────────────────────────────────────────
-  const [inputMode, setInputMode] = useState("image"); // 'image' | 'video'
-
-  const currentModels =
-    inputMode === "image" ? imageLipSyncModels : videoLipSyncModels;
-  const firstModel = currentModels[0];
-
+  // ── Model state ───────────────────────────────────────────────────────────
+  const firstModel = recastModels[0];
   const [selectedModelId, setSelectedModelId] = useState(firstModel?.id ?? "");
-  const [selectedResolution, setSelectedResolution] = useState(
-    firstModel?.inputs?.resolution?.default ?? "480p",
+  const [selectedAspectRatio, setSelectedAspectRatio] = useState(
+    firstModel?.inputs?.aspect_ratio?.default ?? "16:9",
   );
 
-  // ── Upload state ────────────────────────────────────────────────────────
-  const [imageState, setImageState] = useState(UPLOAD_STATE.IDLE);
-  const [imageName, setImageName] = useState("");
-  const [imageUrl, setImageUrl] = useState(null);
-
+  // ── Upload state ──────────────────────────────────────────────────────────
   const [videoState, setVideoState] = useState(UPLOAD_STATE.IDLE);
   const [videoName, setVideoName] = useState("");
   const [videoUrl, setVideoUrl] = useState(null);
-
-  const [audioState, setAudioState] = useState(UPLOAD_STATE.IDLE);
-  const [audioName, setAudioName] = useState("");
-  const [audioUrl, setAudioUrl] = useState(null);
-
-  // ── Individual progress states ──
-  const [imageProgress, setImageProgress] = useState(0);
   const [videoProgress, setVideoProgress] = useState(0);
-  const [audioProgress, setAudioProgress] = useState(0);
 
-  // ── Prompt ──────────────────────────────────────────────────────────────
+  const [imageState, setImageState] = useState(UPLOAD_STATE.IDLE);
+  const [imageName, setImageName] = useState("");
+  const [imageUrl, setImageUrl] = useState(null);
+  const [imageProgress, setImageProgress] = useState(0);
+
+  // ── Prompt ────────────────────────────────────────────────────────────────
   const [prompt, setPrompt] = useState("");
 
-  // ── Generation / UI state ───────────────────────────────────────────────
+  // ── Generation / UI state ─────────────────────────────────────────────────
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateError, setGenerateError] = useState(null);
   const [fullscreenUrl, setFullscreenUrl] = useState(null);
-  const [view, setView] = useState("input"); // 'input' | 'result'
-  const [activeResultUrl, setActiveResultUrl] = useState(null);
 
-  // ── History ─────────────────────────────────────────────────────────────
-  // If historyItems prop is provided, use it; otherwise use internal state.
+  // ── History ───────────────────────────────────────────────────────────────
   const [internalHistory, setInternalHistory] = useState([]);
   const history = historyItems ?? internalHistory;
-  const [activeHistoryIdx, setActiveHistoryIdx] = useState(0);
 
-  // ── Dropdown state ──────────────────────────────────────────────────────
-  const [openDropdown, setOpenDropdown] = useState(null); // 'model' | 'resolution' | null
+  // ── Dropdown state ────────────────────────────────────────────────────────
+  const [openDropdown, setOpenDropdown] = useState(null); // 'model' | 'aspect' | null
   const modelBtnRef = useRef(null);
-  const resolutionBtnRef = useRef(null);
+  const aspectBtnRef = useRef(null);
   const textareaRef = useRef(null);
-
-  // ── Video ref for result ────────────────────────────────────────────────
-  const resultVideoRef = useRef(null);
   const hasRestored = useRef(false);
 
-  // ── Persistence: Load ────────────────────────────────────────────────────
+  // ── Persistence: Load ──────────────────────────────────────────────────────
   useEffect(() => {
     try {
       const stored = localStorage.getItem(PERSIST_KEY);
       if (stored) {
         const data = JSON.parse(stored);
-        if (data.inputMode) setInputMode(data.inputMode);
         if (data.selectedModelId) setSelectedModelId(data.selectedModelId);
-        if (data.selectedResolution) setSelectedResolution(data.selectedResolution);
-        if (data.imageUrl) {
-          setImageUrl(data.imageUrl);
-          setImageState(UPLOAD_STATE.READY);
-        }
+        if (data.selectedAspectRatio) setSelectedAspectRatio(data.selectedAspectRatio);
         if (data.videoUrl) {
           setVideoUrl(data.videoUrl);
           setVideoState(UPLOAD_STATE.READY);
         }
-        if (data.audioUrl) {
-          setAudioUrl(data.audioUrl);
-          setAudioState(UPLOAD_STATE.READY);
+        if (data.imageUrl) {
+          setImageUrl(data.imageUrl);
+          setImageState(UPLOAD_STATE.READY);
         }
-        if (data.imageName) setImageName(data.imageName);
         if (data.videoName) setVideoName(data.videoName);
-        if (data.audioName) setAudioName(data.audioName);
+        if (data.imageName) setImageName(data.imageName);
         if (data.prompt) setPrompt(data.prompt);
         if (data.internalHistory) setInternalHistory(data.internalHistory);
       }
     } catch (err) {
-      console.warn("Failed to load LipSyncStudio persistence:", err);
+      console.warn("Failed to load RecastStudio persistence:", err);
     } finally {
       hasRestored.current = true;
     }
   }, []);
 
-  // ── Persistence: Save ────────────────────────────────────────────────────
+  // ── Persistence: Save ──────────────────────────────────────────────────────
   useEffect(() => {
     const timer = setTimeout(() => {
       try {
-        const state = {
-          inputMode,
-          selectedModelId,
-          selectedResolution,
-          imageUrl,
-          imageName,
-          videoUrl,
-          videoName,
-          audioUrl,
-          audioName,
-          prompt,
-          internalHistory,
-        };
-        localStorage.setItem(PERSIST_KEY, JSON.stringify(state));
+        localStorage.setItem(
+          PERSIST_KEY,
+          JSON.stringify({
+            selectedModelId,
+            selectedAspectRatio,
+            videoUrl,
+            videoName,
+            imageUrl,
+            imageName,
+            prompt,
+            internalHistory,
+          }),
+        );
       } catch (err) {
-        console.warn("Failed to save LipSyncStudio persistence:", err);
+        console.warn("Failed to save RecastStudio persistence:", err);
       }
-    }, 500); // 500ms debounce
+    }, 500);
     return () => clearTimeout(timer);
   }, [
-    inputMode,
     selectedModelId,
-    selectedResolution,
-    imageUrl,
-    imageName,
+    selectedAspectRatio,
     videoUrl,
     videoName,
-    audioUrl,
-    audioName,
+    imageUrl,
+    imageName,
     prompt,
     internalHistory,
   ]);
 
-  // ── Derived model info ──────────────────────────────────────────────────
-  const selectedModel = lipsyncModels.find((m) => m.id === selectedModelId);
-  const resolutionOptions = getResolutionsForLipSyncModel(selectedModelId);
-  const showResolution = resolutionOptions.length > 0;
+  // ── Derived model info ──────────────────────────────────────────────────────
+  const selectedModel = getRecastModelById(selectedModelId);
+  const aspectOptions = getAspectRatiosForRecastModel(selectedModelId);
+  const showAspect = aspectOptions.length > 0;
   const showPrompt = !!selectedModel?.hasPrompt;
 
-  // ── Sync model when mode changes ────────────────────────────────────────
-  useEffect(() => {
-    if (hasRestored.current) return;
-    const models =
-      inputMode === "image" ? imageLipSyncModels : videoLipSyncModels;
-    const first = models[0];
-    if (!first) return;
-    setSelectedModelId(first.id);
-    setSelectedResolution(first.inputs?.resolution?.default ?? "480p");
-  }, [inputMode]);
-
-  // ── Upload handlers ─────────────────────────────────────────────────────
-  const handleImageUpload = useCallback(
-    async (file) => {
-      if (file.size > 10 * 1024 * 1024) {
-        alert("Image exceeds 10MB limit.");
-        return;
-      }
-      setImageState(UPLOAD_STATE.UPLOADING);
-      setImageProgress(0);
-      try {
-        const url = await uploadFile(apiKey, file, (pct) => {
-          setImageProgress(pct);
-        });
-        setImageUrl(url);
-        setImageName(file.name);
-        setImageState(UPLOAD_STATE.READY);
-      } catch (err) {
-        setImageState(UPLOAD_STATE.IDLE);
-        alert(`Image upload failed: ${err.message}`);
-      } finally {
-        setImageProgress(0);
-      }
-    },
-    [apiKey],
-  );
-
+  // ── Upload handlers ─────────────────────────────────────────────────────────
   const handleVideoPick = useCallback(
     async (file) => {
       if (file.size > 50 * 1024 * 1024) {
@@ -503,9 +381,7 @@ export default function LipSyncStudio({
       setVideoState(UPLOAD_STATE.UPLOADING);
       setVideoProgress(0);
       try {
-        const url = await uploadFile(apiKey, file, (pct) => {
-          setVideoProgress(pct);
-        });
+        const url = await uploadFile(apiKey, file, (pct) => setVideoProgress(pct));
         setVideoUrl(url);
         setVideoName(file.name);
         setVideoState(UPLOAD_STATE.READY);
@@ -527,90 +403,50 @@ export default function LipSyncStudio({
     el.style.height = Math.min(el.scrollHeight, maxH) + "px";
   };
 
-  const handleAudioPick = useCallback(
+  const handleImageUpload = useCallback(
     async (file) => {
       if (file.size > 10 * 1024 * 1024) {
-        alert("Audio file exceeds 10MB limit.");
+        alert("Image exceeds 10MB limit.");
         return;
       }
-      setAudioState(UPLOAD_STATE.UPLOADING);
-      setAudioProgress(0);
+      setImageState(UPLOAD_STATE.UPLOADING);
+      setImageProgress(0);
       try {
-        const url = await uploadFile(apiKey, file, (pct) => {
-          setAudioProgress(pct);
-        });
-        setAudioUrl(url);
-        setAudioName(file.name);
-        setAudioState(UPLOAD_STATE.READY);
+        const url = await uploadFile(apiKey, file, (pct) => setImageProgress(pct));
+        setImageUrl(url);
+        setImageName(file.name);
+        setImageState(UPLOAD_STATE.READY);
       } catch (err) {
-        setAudioState(UPLOAD_STATE.IDLE);
-        alert(`Audio upload failed: ${err.message}`);
+        setImageState(UPLOAD_STATE.IDLE);
+        alert(`Image upload failed: ${err.message}`);
       } finally {
-        setAudioProgress(0);
+        setImageProgress(0);
       }
     },
     [apiKey],
   );
 
-  // ── Handle Dropped Files ────────────────────────────────────────────────
+  // ── Handle Dropped Files ────────────────────────────────────────────────────
   useEffect(() => {
     if (droppedFiles && droppedFiles.length > 0) {
-      const imageFiles = droppedFiles.filter(f => f.type.startsWith('image/'));
-      const videoFiles = droppedFiles.filter(f => f.type.startsWith('video/'));
-      const audioFiles = droppedFiles.filter(f => f.type.startsWith('audio/'));
-      
-      if (audioFiles.length > 0) {
-        handleAudioPick(audioFiles[0]);
-      } else if (videoFiles.length > 0) {
-        switchToVideo();
-        handleVideoPick(videoFiles[0]);
-      } else if (imageFiles.length > 0) {
-        switchToImage();
-        handleImageUpload(imageFiles[0]);
-      }
+      const imageFiles = droppedFiles.filter((f) => f.type.startsWith("image/"));
+      const videoFiles = droppedFiles.filter((f) => f.type.startsWith("video/"));
+      if (videoFiles.length > 0) handleVideoPick(videoFiles[0]);
+      if (imageFiles.length > 0) handleImageUpload(imageFiles[0]);
       onFilesHandled?.();
     }
-  }, [droppedFiles, onFilesHandled, handleAudioPick, handleVideoPick, handleImageUpload]);
+  }, [droppedFiles, onFilesHandled, handleVideoPick, handleImageUpload]);
 
-  // ── Mode toggle ─────────────────────────────────────────────────────────
-  const switchToImage = () => {
-    if (inputMode === "image") return;
-    setInputMode("image");
-    setVideoUrl(null);
-    setVideoState(UPLOAD_STATE.IDLE);
-    setVideoName("");
-    const first = imageLipSyncModels[0];
-    if (first) {
-      setSelectedModelId(first.id);
-      setSelectedResolution(first.inputs?.resolution?.default ?? "480p");
-    }
-  };
-
-  const switchToVideo = () => {
-    if (inputMode === "video") return;
-    setInputMode("video");
-    setImageUrl(null);
-    setImageState(UPLOAD_STATE.IDLE);
-    setImageName("");
-    const first = videoLipSyncModels[0];
-    if (first) {
-      setSelectedModelId(first.id);
-      setSelectedResolution(first.inputs?.resolution?.default ?? "480p");
-    }
-  };
-
-  // ── Model selection ─────────────────────────────────────────────────────
+  // ── Model selection ─────────────────────────────────────────────────────────
   const handleModelSelect = (model) => {
     setSelectedModelId(model.id);
-    const resolutions = getResolutionsForLipSyncModel(model.id);
-    if (resolutions.length > 0) {
-      setSelectedResolution(
-        model.inputs?.resolution?.default ?? resolutions[0],
-      );
+    const ratios = getAspectRatiosForRecastModel(model.id);
+    if (ratios.length > 0) {
+      setSelectedAspectRatio(model.inputs?.aspect_ratio?.default ?? ratios[0]);
     }
   };
 
-  // ── History helpers ─────────────────────────────────────────────────────
+  // ── History helpers ─────────────────────────────────────────────────────────
   const addToInternalHistory = useCallback((entry) => {
     setInternalHistory((prev) => [entry, ...prev].slice(0, 30));
   }, []);
@@ -632,18 +468,14 @@ export default function LipSyncStudio({
     }
   };
 
-  // ── Generation ──────────────────────────────────────────────────────────
+  // ── Generation ──────────────────────────────────────────────────────────────
   const handleGenerate = async () => {
-    if (!audioUrl) {
-      alert("Please upload an audio file first.");
-      return;
-    }
-    if (inputMode === "image" && !imageUrl) {
-      alert("Please upload a portrait image first.");
-      return;
-    }
-    if (inputMode === "video" && !videoUrl) {
+    if (!videoUrl) {
       alert("Please upload a source video first.");
+      return;
+    }
+    if (!imageUrl) {
+      alert("Please upload a character image first.");
       return;
     }
 
@@ -651,17 +483,15 @@ export default function LipSyncStudio({
     setGenerateError(null);
 
     try {
-      const lipsyncParams = {
+      const params = {
         model: selectedModelId,
-        audio_url: audioUrl,
+        video_url: videoUrl,
+        image_url: imageUrl,
       };
-      if (inputMode === "image") lipsyncParams.image_url = imageUrl;
-      else lipsyncParams.video_url = videoUrl;
-      if (prompt && selectedModel?.hasPrompt) lipsyncParams.prompt = prompt;
-      if (showResolution) lipsyncParams.resolution = selectedResolution;
-      if (selectedModel?.hasSeed) lipsyncParams.seed = -1;
+      if (showAspect) params.aspect_ratio = selectedAspectRatio;
+      if (prompt && selectedModel?.hasPrompt) params.prompt = prompt;
 
-      const res = await processLipSync(apiKey, lipsyncParams);
+      const res = await processRecast(apiKey, params);
 
       if (!res?.url) throw new Error("No video URL returned by API");
 
@@ -670,26 +500,22 @@ export default function LipSyncStudio({
         id: genId,
         url: res.url,
         prompt,
-        model: selectedModelId,
+        model: selectedModel?.name || selectedModelId,
         timestamp: new Date().toISOString(),
       };
 
       if (!historyItems) addToInternalHistory(entry);
-
-      setActiveResultUrl(res.url);
-      setActiveHistoryIdx(0);
-      setView("result");
 
       if (onGenerationComplete) {
         onGenerationComplete({
           url: res.url,
           model: selectedModelId,
           prompt,
-          type: "lipsync",
+          type: "recast",
         });
       }
     } catch (e) {
-      console.error("[LipSyncStudio]", e);
+      console.error("[RecastStudio]", e);
       setGenerateError(e.message?.slice(0, 80) ?? "Unknown error");
       setTimeout(() => setGenerateError(null), 4000);
     } finally {
@@ -697,54 +523,13 @@ export default function LipSyncStudio({
     }
   };
 
-  // ── Reset to input view ─────────────────────────────────────────────────
-  const handleNew = () => {
-    setView("input");
-    setActiveResultUrl(null);
-    setPrompt("");
-    setImageUrl(null);
-    setImageState(UPLOAD_STATE.IDLE);
-    setImageName("");
-    setVideoUrl(null);
-    setVideoState(UPLOAD_STATE.IDLE);
-    setVideoName("");
-    setAudioUrl(null);
-    setAudioState(UPLOAD_STATE.IDLE);
-    setAudioName("");
-  };
+  // ── Dropdown item lists ─────────────────────────────────────────────────────
+  const aspectDropdownItems = aspectOptions.map((r) => ({ id: r, name: r }));
 
-  // ── Media status labels ─────────────────────────────────────────────────
-  const mediaStatusText =
-    inputMode === "image"
-      ? imageState === UPLOAD_STATE.READY
-        ? `✓ ${imageName}`
-        : "No image"
-      : videoState === UPLOAD_STATE.READY
-        ? `✓ ${videoName}`
-        : "No video";
-  const mediaStatusClass =
-    (inputMode === "image" ? imageState : videoState) === UPLOAD_STATE.READY
-      ? "text-primary"
-      : "text-muted";
-
-  const audioStatusText =
-    audioState === UPLOAD_STATE.READY ? `✓ ${audioName}` : "No audio";
-  const audioStatusClass =
-    audioState === UPLOAD_STATE.READY ? "text-primary" : "text-muted";
-
-  const hasHistory = history.length > 0;
-
-  // ── Dropdown item lists ─────────────────────────────────────────────────
-  const modelDropdownItems = currentModels;
-  const resolutionDropdownItems = resolutionOptions.map((r) => ({
-    id: r,
-    name: r,
-  }));
-
-  // ── Render ──────────────────────────────────────────────────────────────
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="w-full h-full flex flex-col items-center justify-center bg-app-bg relative overflow-hidden">
-      
+
       {/* ── CENTRAL GALLERY AREA ── */}
       <div className="flex-1 w-full max-w-7xl mx-auto overflow-y-auto custom-scrollbar pb-40 lg:pb-32 px-2">
         {history.length > 0 ? (
@@ -768,7 +553,7 @@ export default function LipSyncStudio({
                     e.target.currentTime = 0;
                   }}
                 />
-                
+
                 {/* Overlay actions */}
                 <div className="absolute top-2 right-2 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                   <button
@@ -792,7 +577,7 @@ export default function LipSyncStudio({
                     title="Download"
                     onClick={(e) => {
                       e.stopPropagation();
-                      downloadFile(entry.url, `lipsync-${entry.id || idx}.mp4`);
+                      downloadFile(entry.url, `bodyswap-${entry.id || idx}.mp4`);
                     }}
                     className="p-2 bg-black/60 backdrop-blur-md rounded-full text-white hover:bg-primary hover:text-black transition-all border border-white/10"
                   >
@@ -824,11 +609,8 @@ export default function LipSyncStudio({
                 <div className="p-3 bg-black/80 backdrop-blur-sm border-t border-white/5 flex-1 flex flex-col justify-between gap-2">
                   <div className="flex items-center justify-between flex-wrap gap-1">
                     <span className="text-[10px] font-bold text-primary px-2 py-0.5 bg-primary/10 rounded border border-primary/20 whitespace-nowrap">
-                      {entry.model?.name || entry.model || "Lip Sync"}
+                      {entry.model?.name || entry.model || "Body Swap"}
                     </span>
-                    {entry.resolution && (
-                      <span className="text-[10px] text-white/40">{entry.resolution}</span>
-                    )}
                   </div>
                 </div>
               </div>
@@ -871,11 +653,11 @@ export default function LipSyncStudio({
             <h1 className="text-2xl sm:text-4xl md:text-5xl font-extrabold tracking-tight mb-4 text-center px-4 flex flex-col items-center">
               <span className="text-white font-black uppercase text-xl sm:text-3xl tracking-wide mb-1 opacity-90">START CREATING WITH</span>
               <span className="text-[#22d3ee] font-black uppercase text-2xl sm:text-4xl sm:mt-1 tracking-tight">
-                LIP SYNC STUDIO
+                BODY SWAP STUDIO
               </span>
             </h1>
             <p className="text-white/40 text-xs sm:text-sm font-medium tracking-wide text-center max-w-lg leading-relaxed px-4">
-              Sync any voice with any face video to create premium talking avatars and videos.
+              Swap the character in any video dynamically by choosing a video clip and a target character image.
             </p>
           </div>
         )}
@@ -884,112 +666,43 @@ export default function LipSyncStudio({
       {/* ── BOTTOM PROMPT BAR ── */}
       <div className="absolute bottom-4 w-full max-w-[95%] lg:max-w-4xl z-40 animate-fade-in-up" style={{ animationDelay: "0.2s" }}>
         <div className="w-full bg-gradient-to-b from-[#18181c]/90 via-[#0f0f12]/90 to-[#0c0c0e]/95 backdrop-blur-2xl rounded-[2rem] border border-white/[0.08] p-4 flex flex-col gap-3 shadow-[0_15px_50px_rgba(0,0,0,0.8)]">
-          {/* Mode toggle row */}
-          <div className="flex items-center gap-2 px-3">
-            <button
-              type="button"
-              onClick={switchToImage}
-              className={`px-3 py-1 rounded-md text-xs font-bold transition-all border ${
-                inputMode === "image"
-                  ? "border-[#22d3ee]/60 bg-[#22d3ee]/5 text-[#22d3ee]"
-                  : "border-white/[0.03] bg-white/[0.03] text-white/40 hover:border-white/20 hover:text-white"
-              }`}
-            >
-              🖼 Portrait Image
-            </button>
-            <button
-              type="button"
-              onClick={switchToVideo}
-              className={`px-3 py-1 rounded-md text-[10px] font-bold transition-all border ${
-                inputMode === "video"
-                  ? "border-[#22d3ee]/60 bg-[#22d3ee]/5 text-[#22d3ee]"
-                  : "border-white/[0.03] bg-white/[0.03] text-white/40 hover:border-white/20 hover:text-white"
-              }`}
-            >
-              🎬 Video
-            </button>
-          </div>
-
           {/* Uploads row */}
           <div className="flex items-center gap-2 px-1">
             <div className="flex items-center gap-2">
-              {/* Image picker — only in image mode */}
-              {inputMode === "image" && (
-                <MediaPickerButton
-                  accept="image/*"
-                  label="Image"
-                  icon={
-                    <svg
-                      width="16"
-                      height="16"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      className="text-white/40 group-hover:text-[#22d3ee] transition-colors"
-                    >
-                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                      <circle cx="8.5" cy="8.5" r="1.5" />
-                      <polyline points="21 15 16 10 5 21" />
-                    </svg>
-                  }
-                  onUpload={handleImageUpload}
-                  onClear={() => {
-                    setImageUrl(null);
-                    setImageState(UPLOAD_STATE.IDLE);
-                    setImageName("");
-                  }}
-                  uploadState={imageState}
-                  progress={imageProgress}
-                  fileName={imageName}
-                  previewUrl={imageUrl}
-                  isVideo={false}
-                  apiKey={apiKey}
-                />
-              )}
-
-              {/* Video picker — only in video mode */}
-              {inputMode === "video" && (
-                <MediaPickerButton
-                  accept="video/*"
-                  label="Video"
-                  icon={
-                    <VideoIcon className="text-white/40 group-hover:text-[#22d3ee] transition-colors" />
-                  }
-                  onUpload={handleVideoPick}
-                  onClear={() => {
-                    setVideoUrl(null);
-                    setVideoState(UPLOAD_STATE.IDLE);
-                    setVideoName("");
-                  }}
-                  uploadState={videoState}
-                  progress={videoProgress}
-                  fileName={videoName}
-                  previewUrl={videoUrl}
-                  isVideo={true}
-                  apiKey={apiKey}
-                />
-              )}
-
-              {/* Audio picker — always visible */}
+              {/* Source video */}
               <MediaPickerButton
-                accept="audio/*"
-                label="Audio"
-                icon={
-                  <MicIcon className="text-white/40 group-hover:text-[#22d3ee] transition-colors" />
-                }
-                onUpload={handleAudioPick}
+                accept="video/*"
+                label="Video"
+                icon={<VideoIcon className="text-white/40 group-hover:text-[#22d3ee] transition-colors" />}
+                onUpload={handleVideoPick}
                 onClear={() => {
-                  setAudioUrl(null);
-                  setAudioState(UPLOAD_STATE.IDLE);
-                  setAudioName("");
+                  setVideoUrl(null);
+                  setVideoState(UPLOAD_STATE.IDLE);
+                  setVideoName("");
                 }}
-                uploadState={audioState}
-                progress={audioProgress}
-                fileName={audioName}
-                previewUrl={null}
+                uploadState={videoState}
+                progress={videoProgress}
+                fileName={videoName}
+                previewUrl={videoUrl}
+                isVideo={true}
+              />
+
+              {/* Character image */}
+              <MediaPickerButton
+                accept="image/*"
+                label="Character image"
+                icon={<ImageIcon className="text-white/40 group-hover:text-[#22d3ee] transition-colors" />}
+                onUpload={handleImageUpload}
+                onClear={() => {
+                  setImageUrl(null);
+                  setImageState(UPLOAD_STATE.IDLE);
+                  setImageName("");
+                }}
+                uploadState={imageState}
+                progress={imageProgress}
+                fileName={imageName}
+                previewUrl={imageUrl}
                 isVideo={false}
-                apiKey={apiKey}
               />
             </div>
 
@@ -999,8 +712,8 @@ export default function LipSyncStudio({
                 ref={textareaRef}
                 value={prompt}
                 onChange={handlePromptInput}
-                placeholder="Describe speech style..."
-                className="w-full bg-transparent border-none text-white text-sm placeholder:text-white/20 focus:outline-none resize-none pt-1 leading-relaxed min-h-[40px] max-h-[150px] md:max-h-[250px] overflow-y-auto custom-scrollbar disabled:opacity-40"
+                placeholder="Optional — describe the motion or scene..."
+                className="w-full bg-transparent border-none text-white text-sm placeholder:text-white/10 focus:outline-none resize-none pt-1 leading-relaxed min-h-[40px] max-h-[150px] md:max-h-[250px] overflow-y-auto custom-scrollbar disabled:opacity-40"
                 rows={1}
               />
             </div>
@@ -1016,16 +729,12 @@ export default function LipSyncStudio({
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    setOpenDropdown(
-                      openDropdown === "model" ? null : "model",
-                    );
+                    setOpenDropdown(openDropdown === "model" ? null : "model");
                   }}
                   className="h-[34px] flex items-center gap-2 px-3.5 bg-[#16161a]/60 hover:bg-[#202026]/80 rounded-md transition-all border border-white/[0.06] group whitespace-nowrap shadow-inner"
                 >
                   <div className="w-3.5 h-3.5 bg-[#22d3ee] rounded-sm flex items-center justify-center">
-                    <span className="text-[9px] font-black text-black">
-                      S
-                    </span>
+                    <span className="text-[9px] font-black text-black">R</span>
                   </div>
                   <span className="text-xs font-semibold text-white/70 group-hover:text-[#22d3ee] transition-colors">
                     {selectedModel?.name ?? "Select model"}
@@ -1044,7 +753,7 @@ export default function LipSyncStudio({
                 </button>
                 <Dropdown
                   isOpen={openDropdown === "model"}
-                  items={modelDropdownItems}
+                  items={recastModels}
                   selectedId={selectedModelId}
                   onSelect={handleModelSelect}
                   onClose={() => setOpenDropdown(null)}
@@ -1052,31 +761,29 @@ export default function LipSyncStudio({
                 />
               </div>
 
-              {/* Resolution selector */}
-              {showResolution && (
+              {/* Aspect ratio selector */}
+              {showAspect && (
                 <div className="relative">
                   <button
-                    ref={resolutionBtnRef}
+                    ref={aspectBtnRef}
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      setOpenDropdown(
-                        openDropdown === "resolution" ? null : "resolution",
-                      );
+                      setOpenDropdown(openDropdown === "aspect" ? null : "aspect");
                     }}
                     className="h-[34px] flex items-center gap-2 px-3.5 bg-[#16161a]/60 hover:bg-[#202026]/80 rounded-md transition-all border border-white/[0.06] group whitespace-nowrap shadow-inner"
                   >
                     <span className="text-xs font-semibold text-white/70 group-hover:text-[#22d3ee] transition-colors">
-                      {selectedResolution}
+                      {selectedAspectRatio}
                     </span>
                   </button>
                   <Dropdown
-                    isOpen={openDropdown === "resolution"}
-                    items={resolutionDropdownItems}
-                    selectedId={selectedResolution}
-                    onSelect={(item) => setSelectedResolution(item.id)}
+                    isOpen={openDropdown === "aspect"}
+                    items={aspectDropdownItems}
+                    selectedId={selectedAspectRatio}
+                    onSelect={(item) => setSelectedAspectRatio(item.id)}
                     onClose={() => setOpenDropdown(null)}
-                    anchorRef={resolutionBtnRef}
+                    anchorRef={aspectBtnRef}
                   />
                 </div>
               )}
@@ -1091,17 +798,13 @@ export default function LipSyncStudio({
             >
               {isGenerating ? (
                 <>
-                  <span className="animate-spin inline-block text-black">
-                    ◌
-                  </span>{" "}
-                  Generating...
+                  <span className="animate-spin inline-block text-black">◌</span>{" "}
+                  Swapping...
                 </>
               ) : generateError ? (
                 `Error: ${generateError}`
               ) : (
-                <>
-                  <span>Sync Lip</span>
-                </>
+                <span>Swap Body</span>
               )}
             </button>
           </div>
@@ -1110,7 +813,7 @@ export default function LipSyncStudio({
 
       {/* ── FULLSCREEN MEDIA MODAL ── */}
       {fullscreenUrl && (
-        <div 
+        <div
           className="fixed inset-0 z-[100] flex items-center justify-center bg-black/95 backdrop-blur-sm animate-fade-in"
           onClick={() => setFullscreenUrl(null)}
         >
@@ -1127,12 +830,12 @@ export default function LipSyncStudio({
               <line x1="6" y1="6" x2="18" y2="18" />
             </svg>
           </button>
-          <video 
-            src={fullscreenUrl} 
-            controls 
-            autoPlay 
-            loop 
-            className="max-w-[95vw] max-h-[95vh] rounded-2xl shadow-2xl object-contain animate-scale-up" 
+          <video
+            src={fullscreenUrl}
+            controls
+            autoPlay
+            loop
+            className="max-w-[95vw] max-h-[95vh] rounded-2xl shadow-2xl object-contain animate-scale-up"
             onClick={(e) => e.stopPropagation()}
           />
         </div>
